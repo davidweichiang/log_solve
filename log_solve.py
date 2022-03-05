@@ -13,25 +13,22 @@ def add_(x, y):
 def mul_(x, y):
     x.add_(y)
 
-vv_eq = torch_semiring_einsum.compile_equation('i,i->')
-vm_eq = torch_semiring_einsum.compile_equation('i,ij->j')
-mm_eq = torch_semiring_einsum.compile_equation('ij,jk->ik')
 
-def dot(x, y, block_size):
+def dot(x, y):
     if y.ndim == 1:
-        return torch_semiring_einsum.log_einsum_forward(vv_eq, x, y, block_size=block_size)
+        return torch.logsumexp(x + y, dim=0)
     elif y.ndim == 2:
-        return torch_semiring_einsum.log_einsum_forward(vm_eq, x, y, block_size=block_size)
+        return torch.logsumexp(x.unsqueeze(-1) + y, dim=0)
 
+mm_eq = torch_semiring_einsum.compile_equation('ij,jk->ik')
 def matmul(x, y, block_size):
     return torch_semiring_einsum.log_einsum_forward(mm_eq, x, y, block_size=block_size)
     
-outer_eq = torch_semiring_einsum.compile_equation('i,j->ij')
-def outer(x, y, block_size):
-    return torch_semiring_einsum.log_einsum_forward(outer_eq, x, y, block_size=block_size)
+def outer(x, y):
+    return x.unsqueeze(-1) + y
 
 
-def fix_stril_(l, b, block_size):
+def fix_stril_(l, b):
     """Solve x = l @ x + b by forward substitution, where l is strictly
     lower triangular. If l is in fact not strictly lower triangular, the
     elements on and above the diagonal are treated as 0.
@@ -45,10 +42,10 @@ def fix_stril_(l, b, block_size):
     """
     n = l.shape[0]
     for i in range(1, n):
-        add_(b[i], dot(l[i,:i], b[:i], block_size))
+        add_(b[i], dot(l[i,:i], b[:i]))
 
         
-def fix_triu_(u, b, block_size):
+def fix_triu_(u, b):
     """Solve x = u @ x + b by backward substitution, where u is upper triangular.
     If u is in fact not upper triangular, the elements below the
     diagonal are treated as 0.
@@ -64,11 +61,11 @@ def fix_triu_(u, b, block_size):
     if n > 0:
         mul_(b[n-1], star(u[n-1, n-1]))
         for i in range(n-2, -1, -1):
-            add_(b[i], dot(u[i,i+1:], b[i+1:], block_size))
+            add_(b[i], dot(u[i,i+1:], b[i+1:]))
             mul_(b[i], star(u[i, i]))
 
             
-def lu_(a, block_size):
+def lu_(a):
     """If A is an m x n matrix, where m >= n, find L and U such that:
     
     - L is an m x n lower strictly triangular matrix
@@ -91,8 +88,7 @@ def lu_(a, block_size):
     for k in range(n):
         if a[k,k] != 0.:
             mul_(a[k+1:,k], star(a[k,k]))
-            add_(a[k+1:,k+1:], outer(a[k+1:,k], a[k,k+1:], block_size=block_size))
-
+            add_(a[k+1:,k+1:], outer(a[k+1:,k], a[k,k+1:]))
 
 def fix(a, b, block_size):
     """Solve x = a @ x + b by block Gaussian elimination.
@@ -113,12 +109,12 @@ def fix(a, b, block_size):
     n = a.shape[0]
     r = block_size
     for k in range(0, n, r):
-        lu_(a[k:,k:k+r], r)
+        lu_(a[k:,k:k+r])
         l11 = a[k:k+r,k:k+r]
         l21 = a[k+r:,k:k+r]
         u12 = a[k:k+r,k+r:]
-        fix_stril_(l11, u12, r)
+        fix_stril_(l11, u12)
         add_(a[k+r:,k+r:], matmul(l21, u12, r))
-    fix_stril_(a, b, r)
-    fix_triu_(a, b, r)
+    fix_stril_(a, b)
+    fix_triu_(a, b)
     return b

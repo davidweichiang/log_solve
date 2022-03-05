@@ -31,7 +31,7 @@ class TestSolve(unittest.TestCase):
             l = rand(*lshape).tril(-1)
             b = rand(*bshape)
             x = b.clone()
-            fix_stril_(torch.log(l), x, 3)
+            fix_stril_(torch.log(l), x)
             self.assertTrue(close(x, f(l, x, b)))
 
     def test_fix_stril_single(self):
@@ -44,7 +44,7 @@ class TestSolve(unittest.TestCase):
             u = rand(*ushape).triu()
             b = rand(*bshape)
             x = b.clone()
-            fix_triu_(torch.log(u), x, 3)
+            fix_triu_(torch.log(u), x)
             self.assertTrue(close(x, f(u, x, b)))
 
     def test_fix_triu_single(self):
@@ -57,7 +57,7 @@ class TestSolve(unittest.TestCase):
             m, n = 10, 5
             a = rand(m, n)
             l_plus_u = a.clone()
-            lu_(l_plus_u, 3)
+            lu_(l_plus_u)
             a = torch.exp(a)
             l_plus_u = torch.exp(l_plus_u)
             l = l_plus_u.tril(-1)

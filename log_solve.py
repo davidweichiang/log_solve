@@ -78,8 +78,8 @@ def lu_(a):
 
     cf. Golub and van Loan, 3rd ed., Algorithm 3.4.1 (p. 112)
 
-    We can't do pivoting, but pivoting is not necessary because A
-    is diagonally dominant.
+    We can't do pivoting because we are storing I-A and can't permute
+    the rows of the implicit I.
 
     Time: O(mn^2)
 

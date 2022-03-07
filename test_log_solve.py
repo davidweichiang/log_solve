@@ -1,5 +1,4 @@
 import torch
-import torch_semiring_einsum
 from log_solve import add_, fix_stril_, fix_triu_, lu_, fix
 
 import unittest
@@ -7,15 +6,8 @@ import unittest
 def rand(*shape):
     return -torch.empty(shape).uniform_(0, 10)
 
-mv_eq = torch_semiring_einsum.compile_equation('ij,j->i')
-mm_eq = torch_semiring_einsum.compile_equation('ij,jk->ik')
 def f(a, x, b):
-    if b.ndim == 1:
-        y = torch_semiring_einsum.log_einsum_forward(mv_eq, a, x, block_size=1)
-    elif b.ndim == 2:
-        y = torch_semiring_einsum.log_einsum_forward(mm_eq, a, x, block_size=1)
-    add_(y, b)
-    return y
+    return torch.log(torch.exp(a) @ torch.exp(x) + torch.exp(b))
 
 def close(x, y):
     # Change inf-inf = nan to 0
@@ -31,7 +23,7 @@ class TestSolve(unittest.TestCase):
             l = rand(*lshape).tril(-1)
             b = rand(*bshape)
             x = b.clone()
-            fix_stril_(torch.log(l), x)
+            fix_stril_(torch.log(l), x, 3)
             self.assertTrue(close(x, f(l, x, b)))
 
     def test_fix_stril_single(self):
@@ -44,7 +36,7 @@ class TestSolve(unittest.TestCase):
             u = rand(*ushape).triu()
             b = rand(*bshape)
             x = b.clone()
-            fix_triu_(torch.log(u), x)
+            fix_triu_(torch.log(u), x, 5)
             self.assertTrue(close(x, f(u, x, b)))
 
     def test_fix_triu_single(self):

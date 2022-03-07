@@ -1,5 +1,4 @@
 import torch
-import torch_semiring_einsum
 from log_solve import fix
 
 import timeit
@@ -9,7 +8,7 @@ def rand(*shape):
 
 for n in [1000]:
     for r in [1, 10, 100]:
-        for block_size in [1000]:
+        for block_size in [100, 1000]:
             if block_size > n: continue
             def f_ours():
                 a = rand(n, n)

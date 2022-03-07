@@ -1,34 +1,40 @@
 __all__ = ['fix']
 
 import torch
-import torch_semiring_einsum
 
 def star(x):
     # log(1/(1-exp(x)))
     return -torch.log1p(-torch.exp(x)) if x < 0 else torch.inf
 
 def add_(x, y):
-    x.copy_(x.logaddexp(y))
+    torch.logaddexp(x, y, out=x)
 
 def mul_(x, y):
     x.add_(y)
 
 
-def dot(x, y):
-    if y.ndim == 1:
-        return torch.logsumexp(x + y, dim=0)
-    elif y.ndim == 2:
-        return torch.logsumexp(x.unsqueeze(-1) + y, dim=0)
-
-mm_eq = torch_semiring_einsum.compile_equation('ij,jk->ik')
-def matmul(x, y, block_size):
-    return torch_semiring_einsum.log_einsum_forward(mm_eq, x, y, block_size=block_size)
+def matmul(a, b, block_size):
+    """
+    Space: O(rnp)
+    """
+    m, n = a.shape
+    _, p = b.shape
+    r = block_size
+    dtype = a.dtype
+    c = torch.empty(m, p, dtype=dtype)
+    t = torch.empty(r, n, p, dtype=dtype)
+    for i in range(0, m, r):
+        if m-i < r: t = t[:m-i]
+        # c[i:i+r] = a[i:i+r] @ b
+        torch.add(a[i:i+r].unsqueeze(-1), b, out=t)
+        torch.logsumexp(t, dim=1, out=c[i:i+r])
+    return c
     
 def outer(x, y):
     return x.unsqueeze(-1) + y
 
 
-def fix_stril_(l, b):
+def fix_stril_(l, b, block_size):
     """Solve x = l @ x + b by forward substitution, where l is strictly
     lower triangular. If l is in fact not strictly lower triangular, the
     elements on and above the diagonal are treated as 0.
@@ -41,11 +47,17 @@ def fix_stril_(l, b):
     Time: O(n^2 r) where r is the number of columns of b.
     """
     n = l.shape[0]
-    for i in range(1, n):
-        add_(b[i], dot(l[i,:i], b[:i]))
-
+    r = block_size
+    if b.ndim == 1:
+        b = b.unsqueeze(-1)
+    for i0 in range(0, n, r):
+        i1 = min(n, i0+r)
+        for i in range(i0, i1):
+            add_(b[i+1:i1], outer(l[i+1:i1,i], b[i]))
+        add_(b[i1:], matmul(l[i1:,i0:i1], b[i0:i1], r))
         
-def fix_triu_(u, b):
+
+def fix_triu_(u, b, block_size):
     """Solve x = u @ x + b by backward substitution, where u is upper triangular.
     If u is in fact not upper triangular, the elements below the
     diagonal are treated as 0.
@@ -58,13 +70,17 @@ def fix_triu_(u, b):
     Time: O(n^2 r) where r is the number of columns of b.
     """
     n = u.shape[0]
-    if n > 0:
-        mul_(b[n-1], star(u[n-1, n-1]))
-        for i in range(n-2, -1, -1):
-            add_(b[i], dot(u[i,i+1:], b[i+1:]))
-            mul_(b[i], star(u[i, i]))
+    r = block_size
+    if b.ndim == 1:
+        b = b.unsqueeze(-1)
+    for i0 in reversed(range(0, n, r)):
+        i1 = min(n, i0+r)
+        for i in reversed(range(i0, i1)):
+            mul_(b[i], star(u[i,i]))
+            add_(b[i0:i], outer(u[i0:i,i], b[i]))
+        add_(b[:i0], matmul(u[:i0,i0:i1], b[i0:i1], r))
 
-            
+        
 def lu_(a):
     """If A is an m x n matrix, where m >= n, find L and U such that:
     
@@ -90,7 +106,8 @@ def lu_(a):
             mul_(a[k+1:,k], star(a[k,k]))
             add_(a[k+1:,k+1:], outer(a[k+1:,k], a[k,k+1:]))
 
-def fix(a, b, block_size):
+            
+def fix_block_lu(a, b, block_size):
     """Solve x = a @ x + b by block Gaussian elimination.
 
     cf. Golub and van Loan, 3rd ed., Section 3.4.7 (p. 116)
@@ -110,11 +127,33 @@ def fix(a, b, block_size):
     r = block_size
     for k in range(0, n, r):
         lu_(a[k:,k:k+r])
-        l11 = a[k:k+r,k:k+r]
-        l21 = a[k+r:,k:k+r]
         u12 = a[k:k+r,k+r:]
-        fix_stril_(l11, u12)
-        add_(a[k+r:,k+r:], matmul(l21, u12, r))
-    fix_stril_(a, b)
-    fix_triu_(a, b)
+        fix_stril_(a[k:k+r,k:k+r], u12, r)
+        add_(a[k+r:,k+r:], matmul(a[k+r:,k:k+r], u12, r))
+    fix_stril_(a, b, r)
+    fix_triu_(a, b, r)
     return b
+
+
+def fix_floyd_warshall(a, b, block_size):
+    """Not as fast, but included here for its simplicity."""
+    if a.ndim != 2 or a.shape[0] != a.shape[1]:
+        raise ValueError(f'a must be a square matrix (not {a.shape})')
+    bshape = b.shape
+    if b.ndim == 1:
+        b = b.unsqueeze(-1)
+    elif b.ndim > 2:
+        raise ValueError(f'b must have 1 or 2 dimensions (not {b.ndim})')
+    if a.shape[0] != b.shape[0]:
+        raise ValueError(f'b must have the same number of rows as a (a has {a.shape[0]}, b has {b.shape[0]})')
+    a = a.clone()
+    b = b.clone()
+    n = a.shape[0]
+    for k in range(n):
+        mul_(a[:,k],    star(a[k,k]))
+        add_(b,         outer(a[:,k], b[k,:]))
+        add_(a[:,k+1:], outer(a[:,k], a[k,k+1:]))
+    return b.reshape(*bshape)
+
+fix = fix_block_lu
+
